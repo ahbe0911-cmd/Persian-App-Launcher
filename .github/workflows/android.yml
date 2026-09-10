@@ -2,9 +2,7 @@ name: Build Launcher APK
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    branches: [ v26-from-v23 ]
   workflow_dispatch:
 
 permissions:
@@ -37,6 +35,9 @@ jobs:
       - name: Apply version 23 minimal header
         run: python3 scripts/apply_v23_layout.py
 
+      - name: Apply version 26 add-app fix
+        run: python3 scripts/apply_v26_add_button.py
+
       - name: Fix generated imports
         run: |
           python3 - <<'PY'
@@ -47,10 +48,7 @@ jobs:
           s = s.replace('import sh.calvin.reorderable.longPressDraggableHandle\n', '')
           imp = 'import androidx.compose.foundation.gestures.awaitFirstDown\n'
           if 'awaitFirstDown(' in s and imp not in s:
-              s = s.replace(
-                  'import androidx.compose.foundation.gestures.awaitEachGesture\n',
-                  'import androidx.compose.foundation.gestures.awaitEachGesture\n' + imp
-              )
+              s = s.replace('import androidx.compose.foundation.gestures.awaitEachGesture\n','import androidx.compose.foundation.gestures.awaitEachGesture\n' + imp)
           p.write_text(s, encoding='utf-8')
           PY
 
@@ -67,6 +65,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MyLauncher-v23-apk
+          name: MyLauncher-v26-from-v23-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
