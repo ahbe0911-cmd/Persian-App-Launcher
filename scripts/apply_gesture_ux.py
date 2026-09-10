@@ -166,11 +166,41 @@ if "import androidx.compose.foundation.gestures.awaitEachGesture\n" not in text:
         "import androidx.compose.foundation.isSystemInDarkTheme\n",
         "import androidx.compose.foundation.isSystemInDarkTheme\nimport androidx.compose.foundation.gestures.awaitEachGesture\n"
     )
-if "import androidx.compose.ui.input.pointer.awaitFirstDown\n" not in text:
+if "import androidx.compose.foundation.gestures.awaitFirstDown\n" not in text:
     text = text.replace(
-        "import androidx.compose.ui.input.pointer.pointerInput\n",
-        "import androidx.compose.ui.input.pointer.pointerInput\nimport androidx.compose.ui.input.pointer.awaitFirstDown\n"
+        "import androidx.compose.foundation.gestures.awaitEachGesture\n",
+        "import androidx.compose.foundation.gestures.awaitEachGesture\nimport androidx.compose.foundation.gestures.awaitFirstDown\n"
     )
+text = text.replace("import androidx.compose.ui.input.pointer.awaitFirstDown\n", "")
+
+old_refresh = '''    LaunchedEffect(refreshKey) {
+        if (storedPages.first.isNullOrBlank() || storedPages.third) persist()
+        withContext(Dispatchers.IO) { runCatching { queryLauncherApps(appContext) } }
+            .onSuccess { loaded ->
+                installedApps = loaded
+                prefs.edit().putString(KEY_APP_CACHE, encodeAppCache(loaded)).apply()
+            }
+    }
+'''
+new_refresh = '''    LaunchedEffect(refreshKey) {
+        if (storedPages.first.isNullOrBlank() || storedPages.third) persist()
+
+        // Cache-first startup: avoid a full PackageManager scan on every launch.
+        // The cached list renders immediately; scan only on first run or manual refresh.
+        if (installedApps.isEmpty() || refreshKey > 0) {
+            withContext(Dispatchers.IO) { runCatching { queryLauncherApps(appContext) } }
+                .onSuccess { loaded ->
+                    if (loaded.isNotEmpty()) {
+                        installedApps = loaded
+                        prefs.edit().putString(KEY_APP_CACHE, encodeAppCache(loaded)).apply()
+                    }
+                }
+        }
+    }
+'''
+if old_refresh not in text:
+    raise SystemExit("startup refresh block not found; source changed")
+text = text.replace(old_refresh, new_refresh, 1)
 
 old_launch = '''private fun launchApp(context: Context, app: AppEntry) {
     val intent = if (app.activityName.isNotBlank()) Intent.makeMainActivity(ComponentName(app.packageName, app.activityName))
@@ -180,23 +210,32 @@ old_launch = '''private fun launchApp(context: Context, app: AppEntry) {
 new_launch = '''private fun launchApp(context: Context, app: AppEntry) {
     if (app.packageName == context.packageName) return
     val pm = context.packageManager
-    val canonical = pm.getLaunchIntentForPackage(app.packageName)?.apply {
+
+    // Launch exactly like a launcher: start the target app as its own task.
+    // Prefer a fresh PackageManager intent so cached activity names cannot go stale.
+    val canonical = runCatching { pm.getLaunchIntentForPackage(app.packageName) }.getOrNull()?.apply {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
     }
     val fallback = if (app.activityName.isNotBlank()) {
-        Intent.makeMainActivity(ComponentName(app.packageName, app.activityName)).apply {
+        Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+            component = ComponentName(app.packageName, app.activityName)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
         }
     } else null
+
     val target = canonical ?: fallback ?: return
-    runCatching { context.startActivity(target) }
+    val appContext = context.applicationContext
+    runCatching { appContext.startActivity(target) }
         .recoverCatching {
-            if (target !== fallback && fallback != null) context.startActivity(fallback)
+            val fresh = pm.getLaunchIntentForPackage(app.packageName) ?: throw it
+            fresh.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            appContext.startActivity(fresh)
         }
 }'''
 if old_launch not in text:
     raise SystemExit("launchApp block not found; source changed")
-text = text.replace(old_launch, new_launch)
+text = text.replace(old_launch, new_launch, 1)
 
 text = text.replace(
     '"برای جابه‌جایی، آیکون برنامه را نگه دارید و بکشید."',
@@ -212,4 +251,4 @@ text = text.replace(
 )
 
 path.write_text(text, encoding="utf-8")
-print("Applied atomic reorder gesture + canonical package launch fix")
+print("Applied cache-first startup + task-independent app launch + gesture UX")
