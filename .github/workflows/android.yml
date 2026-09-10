@@ -31,6 +31,9 @@ jobs:
       - name: Apply gesture UX patch
         run: python3 scripts/apply_gesture_ux.py
 
+      - name: Apply version 22 layout polish
+        run: python3 scripts/apply_v22_layout.py
+
       - name: Fix generated imports
         run: |
           python3 - <<'PY'
