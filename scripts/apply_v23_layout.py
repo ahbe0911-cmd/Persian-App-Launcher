@@ -4,14 +4,16 @@ p = Path("app/src/main/java/com/ahbe/mylauncher/MainActivity.kt")
 s = p.read_text(encoding="utf-8")
 
 # V23: replace the large dashboard header with a minimal settings-only strip.
+# The previous patch replaced everything up to AppTile and accidentally removed
+# EmptyPage. Recreate both composables explicitly so empty launcher pages compile.
 start_marker = "@Composable\nprivate fun DashboardHeader("
 end_marker = "\n@Composable\nprivate fun AppTile("
 start = s.find(start_marker)
 end = s.find(end_marker, start)
 if start < 0 or end < 0:
-    raise SystemExit("DashboardHeader block not found; source changed")
+    raise SystemExit("DashboardHeader/AppTile boundary not found; source changed")
 
-new_header = r'''@Composable
+replacement = r'''@Composable
 private fun DashboardHeader(
     title: String,
     appCount: Int,
@@ -39,9 +41,29 @@ private fun DashboardHeader(
         }
     }
 }
+
+@Composable
+private fun EmptyPage(onAdd: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "+ افزودن برنامه",
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .clickable(onClick = onAdd)
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
+}
 '''
 
-s = s[:start] + new_header + s[end:]
+s = s[:start] + replacement + s[end:]
 
 # Grid begins immediately below the compact settings strip.
 s = s.replace(
