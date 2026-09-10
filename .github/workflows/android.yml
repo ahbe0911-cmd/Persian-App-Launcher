@@ -37,6 +37,7 @@ jobs:
           from pathlib import Path
           p = Path('app/src/main/java/com/ahbe/mylauncher/MainActivity.kt')
           s = p.read_text(encoding='utf-8')
+          s = s.replace('import androidx.compose.ui.input.pointer.awaitFirstDown\n', '')
           imp = 'import androidx.compose.foundation.gestures.awaitFirstDown\n'
           if imp not in s:
               s = s.replace(
