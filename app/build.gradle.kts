@@ -12,8 +12,8 @@ android {
         applicationId = "com.ahbe.mylauncher"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 21
+        versionName = "0.21.0"
     }
 
     buildFeatures { compose = true }
@@ -35,5 +35,6 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.0")
     implementation("androidx.datastore:datastore-preferences:1.1.7")
+    implementation("sh.calvin.reorderable:reorderable:3.1.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
