@@ -58,12 +58,16 @@ private fun MyLauncherApp() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("launcher_state", Context.MODE_PRIVATE) }
     val installedApps = remember { queryLauncherApps(context) }
-    val pages = remember { loadPages(prefs.getString("pages", null)).toMutableStateList() }
-    var columns by remember { mutableIntStateOf(prefs.getInt("columns", 4)) }
+    val pages = remember {
+        val savedPages = loadPages(prefs.getString("pages", null))
+        (if (savedPages.isEmpty()) listOf(LauncherPage("برنامه‌های من", mutableStateListOf())) else savedPages)
+            .toMutableStateList()
+    }
+    var columns by remember { mutableIntStateOf(prefs.getInt("columns", 4).coerceIn(3, 6)) }
     var showAppPicker by remember { mutableStateOf(false) }
     var showNewPage by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
-    val pagerState = rememberPagerState(pageCount = { pages.size.coerceAtLeast(1) })
+    val pagerState = rememberPagerState(pageCount = { pages.size })
     val scope = rememberCoroutineScope()
 
     fun persist() {
@@ -71,10 +75,7 @@ private fun MyLauncherApp() {
     }
 
     LaunchedEffect(Unit) {
-        if (pages.isEmpty()) {
-            pages += LauncherPage("برنامه‌های من", mutableStateListOf())
-            persist()
-        }
+        if (prefs.getString("pages", null).isNullOrBlank()) persist()
     }
 
     MaterialTheme(
@@ -112,7 +113,7 @@ private fun MyLauncherApp() {
         ) { inner ->
             Column(Modifier.fillMaxSize().padding(inner)) {
                 HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { pageIndex ->
-                    val page = pages[pageIndex]
+                    val page = pages.getOrNull(pageIndex) ?: return@HorizontalPager
                     val entries = page.packages.mapNotNull { pkg -> installedApps.firstOrNull { it.packageName == pkg } }
                     if (entries.isEmpty()) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -186,12 +187,15 @@ private fun MyLauncherApp() {
                 pageTitle = pages.getOrNull(pagerState.currentPage)?.title.orEmpty(),
                 canDeletePage = pages.size > 1,
                 onDismiss = { showSettings = false },
-                onColumns = { columns = it; persist() },
+                onColumns = { columns = it.coerceIn(3, 6); persist() },
                 onRename = { title -> pages.getOrNull(pagerState.currentPage)?.title = title; persist() },
                 onAddPage = { showSettings = false; showNewPage = true },
                 onDeletePage = {
                     if (pages.size > 1) {
-                        pages.removeAt(pagerState.currentPage.coerceIn(0, pages.lastIndex)); persist()
+                        val index = pagerState.currentPage.coerceIn(0, pages.lastIndex)
+                        pages.removeAt(index)
+                        persist()
+                        scope.launch { pagerState.scrollToPage(index.coerceAtMost(pages.lastIndex)) }
                     }
                     showSettings = false
                 }
@@ -227,7 +231,7 @@ private fun AppTile(app: AppEntry, onLaunch: () -> Unit, onRemove: () -> Unit) {
 
 @Composable
 private fun AppPickerDialog(apps: List<AppEntry>, selected: Set<String>, onDismiss: () -> Unit, onApply: (List<String>) -> Unit) {
-    val picked = remember { selected.toMutableStateList() }
+    val picked = remember(selected) { selected.toMutableStateList() }
     var query by remember { mutableStateOf("") }
     val filtered = remember(query, apps) { apps.filter { it.label.contains(query, true) || it.packageName.contains(query, true) } }
     AlertDialog(
