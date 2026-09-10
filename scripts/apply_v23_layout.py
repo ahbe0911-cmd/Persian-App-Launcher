@@ -3,9 +3,7 @@ from pathlib import Path
 p = Path("app/src/main/java/com/ahbe/mylauncher/MainActivity.kt")
 s = p.read_text(encoding="utf-8")
 
-# V23: replace the large dashboard header with a minimal settings-only strip.
-# The previous patch replaced everything up to AppTile and accidentally removed
-# EmptyPage. Recreate both composables explicitly so empty launcher pages compile.
+# V27: keep the fast/minimal V26 layout, but always show the current page title.
 start_marker = "@Composable\nprivate fun DashboardHeader("
 end_marker = "\n@Composable\nprivate fun AppTile("
 start = s.find(start_marker)
@@ -20,13 +18,13 @@ private fun DashboardHeader(
     onAdd: () -> Unit,
     onSettings: () -> Unit
 ) {
-    Box(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .height(44.dp)
+            .height(52.dp)
             .padding(horizontal = 14.dp),
-        contentAlignment = Alignment.CenterStart
+        verticalAlignment = Alignment.CenterVertically
     ) {
         IconButton(
             onClick = onSettings,
@@ -39,6 +37,17 @@ private fun DashboardHeader(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = title,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End
+        )
     }
 }
 
@@ -65,7 +74,6 @@ private fun EmptyPage(onAdd: () -> Unit) {
 
 s = s[:start] + replacement + s[end:]
 
-# Grid begins immediately below the compact settings strip.
 s = s.replace(
     "contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),",
     "contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 16.dp),"
