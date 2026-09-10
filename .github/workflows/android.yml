@@ -31,8 +31,11 @@ jobs:
       - name: Apply gesture UX patch
         run: python3 scripts/apply_gesture_ux.py
 
-      - name: Apply version 22 layout polish
+      - name: Apply version 22 grid polish
         run: python3 scripts/apply_v22_layout.py
+
+      - name: Apply version 23 minimal header
+        run: python3 scripts/apply_v23_layout.py
 
       - name: Fix generated imports
         run: |
@@ -64,6 +67,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MyLauncher-debug-apk
+          name: MyLauncher-v23-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
