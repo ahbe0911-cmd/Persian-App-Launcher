@@ -13,7 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,10 +27,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ArrowDownward
-import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.*
@@ -40,11 +39,13 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -55,14 +56,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private const val PREFS_NAME = "launcher_state"
 private const val KEY_PAGES = "pages"
 private const val KEY_COLUMNS = "columns"
+private const val KEY_ICON_SIZE = "icon_size"
 private const val KEY_LAST_SAVED = "last_saved_epoch"
 private const val KEY_APP_CACHE = "app_cache_v1"
 
@@ -107,10 +113,9 @@ private fun LauncherRoot() {
         }.toMutableStateList()
     }
 
-    var installedApps by remember {
-        mutableStateOf(loadAppCache(prefs.getString(KEY_APP_CACHE, null)))
-    }
+    var installedApps by remember { mutableStateOf(loadAppCache(prefs.getString(KEY_APP_CACHE, null))) }
     var columns by remember { mutableIntStateOf(prefs.getInt(KEY_COLUMNS, 4).coerceIn(3, 6)) }
+    var iconSize by remember { mutableIntStateOf(prefs.getInt(KEY_ICON_SIZE, 64).coerceIn(48, 84)) }
     var lastSavedEpoch by remember { mutableLongStateOf(prefs.getLong(KEY_LAST_SAVED, 0L)) }
     var showAppPicker by remember { mutableStateOf(false) }
     var showNewPage by remember { mutableStateOf(false) }
@@ -128,18 +133,18 @@ private fun LauncherRoot() {
         prefs.edit()
             .putString(KEY_PAGES, encodePages(pages))
             .putInt(KEY_COLUMNS, columns)
+            .putInt(KEY_ICON_SIZE, iconSize)
             .putLong(KEY_LAST_SAVED, now)
             .apply()
     }
 
     LaunchedEffect(refreshKey) {
         if (storedPages.first.isNullOrBlank() || storedPages.third) persist()
-        withContext(Dispatchers.IO) {
-            runCatching { queryLauncherApps(appContext) }
-        }.onSuccess { loaded ->
-            installedApps = loaded
-            prefs.edit().putString(KEY_APP_CACHE, encodeAppCache(loaded)).apply()
-        }
+        withContext(Dispatchers.IO) { runCatching { queryLauncherApps(appContext) } }
+            .onSuccess { loaded ->
+                installedApps = loaded
+                prefs.edit().putString(KEY_APP_CACHE, encodeAppCache(loaded)).apply()
+            }
     }
 
     val dark = isSystemInDarkTheme()
@@ -154,7 +159,7 @@ private fun LauncherRoot() {
         lightColorScheme(
             primary = Color(0xFF7047EB),
             background = Color(0xFFF8F8FC),
-            surface = Color(0xFFF0EBF3),
+            surface = Color(0xFFF1ECF4),
             surfaceVariant = Color(0xFFEAE5ED)
         )
     }
@@ -174,16 +179,15 @@ private fun LauncherRoot() {
         val gradient = if (dark) {
             Brush.verticalGradient(listOf(Color(0xFF101218), Color(0xFF171A22)))
         } else {
-            Brush.verticalGradient(listOf(Color(0xFFFBFAFE), Color(0xFFF5F3F8)))
+            Brush.verticalGradient(listOf(Color(0xFFFCFBFF), Color(0xFFF6F3F9)))
         }
 
         Scaffold(containerColor = Color.Transparent) { inner ->
             Column(Modifier.fillMaxSize().background(gradient).padding(inner)) {
                 val currentPage = pages.getOrNull(pagerState.currentPage)
-                Header(
+                DashboardHeader(
                     title = currentPage?.title ?: "لانچر من",
                     appCount = currentPage?.packages?.size ?: 0,
-                    lastSavedEpoch = lastSavedEpoch,
                     onAdd = { showAppPicker = true },
                     onSettings = { showSettings = true }
                 )
@@ -208,40 +212,33 @@ private fun LauncherRoot() {
                             columns = GridCells.Fixed(columns),
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(18.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             itemsIndexed(
                                 items = entries,
                                 key = { _, item -> item.packageName },
                                 contentType = { _, _ -> "app" }
-                            ) { index, item ->
+                            ) { _, item ->
                                 val displayName = page.customNames[item.packageName]
                                     ?.takeIf { it.isNotBlank() } ?: item.label
                                 AppTile(
                                     app = item,
                                     displayName = displayName,
                                     iconCache = iconCache,
-                                    canMoveUp = index > 0,
-                                    canMoveDown = index < entries.lastIndex,
+                                    iconSize = iconSize,
+                                    columns = columns,
                                     onLaunch = { launchApp(context, item) },
                                     onRename = { newName ->
                                         val clean = newName.trim()
-                                        if (clean.isBlank() || clean == item.label) {
-                                            page.customNames.remove(item.packageName)
-                                        } else {
-                                            page.customNames[item.packageName] = clean
-                                        }
+                                        if (clean.isBlank() || clean == item.label) page.customNames.remove(item.packageName)
+                                        else page.customNames[item.packageName] = clean
                                         persist()
                                     },
-                                    onMoveUp = {
-                                        movePackage(page.packages, item.packageName, -1)
-                                        persist()
+                                    onDragMove = { delta ->
+                                        movePackageBy(page.packages, item.packageName, delta)
                                     },
-                                    onMoveDown = {
-                                        movePackage(page.packages, item.packageName, 1)
-                                        persist()
-                                    },
+                                    onDragFinished = { persist() },
                                     onRemove = {
                                         page.packages.remove(item.packageName)
                                         page.customNames.remove(item.packageName)
@@ -266,10 +263,7 @@ private fun LauncherRoot() {
                 onRefresh = { refreshKey++ },
                 onDismiss = { showAppPicker = false },
                 onApply = { selected ->
-                    page?.packages?.apply {
-                        clear()
-                        addAll(selected)
-                    }
+                    page?.packages?.apply { clear(); addAll(selected) }
                     page?.customNames?.keys?.toList()?.forEach { packageName ->
                         if (packageName !in selected) page.customNames.remove(packageName)
                     }
@@ -291,29 +285,25 @@ private fun LauncherRoot() {
         if (showSettings) {
             SettingsDialog(
                 columns = columns,
+                iconSize = iconSize,
                 pageTitle = pages.getOrNull(pagerState.currentPage)?.title.orEmpty(),
                 canDeletePage = pages.size > 1,
                 onDismiss = { showSettings = false },
                 onColumns = { value ->
                     val safe = value.coerceIn(3, 6)
-                    if (safe != columns) {
-                        columns = safe
-                        persist()
-                    }
+                    if (safe != columns) { columns = safe; persist() }
+                },
+                onIconSize = { value ->
+                    val safe = value.coerceIn(48, 84)
+                    if (safe != iconSize) { iconSize = safe; persist() }
                 },
                 onRename = { title ->
                     pages.getOrNull(pagerState.currentPage)?.let { page ->
                         val clean = title.trim()
-                        if (clean.isNotEmpty()) {
-                            page.title = clean
-                            persist()
-                        }
+                        if (clean.isNotEmpty()) { page.title = clean; persist() }
                     }
                 },
-                onAddPage = {
-                    showSettings = false
-                    showNewPage = true
-                },
+                onAddPage = { showSettings = false; showNewPage = true },
                 onDeletePage = {
                     if (pages.size > 1) {
                         val index = pagerState.currentPage.coerceIn(0, pages.lastIndex)
@@ -329,36 +319,81 @@ private fun LauncherRoot() {
 }
 
 @Composable
-private fun Header(
+private fun DashboardHeader(
     title: String,
     appCount: Int,
-    lastSavedEpoch: Long,
     onAdd: () -> Unit,
     onSettings: () -> Unit
 ) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(30_000)
+        }
+    }
+    val time = remember(now) {
+        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(now)).toPersianDigits()
+    }
+
     Surface(
-        modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 14.dp, vertical = 8.dp),
-        shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = .88f),
-        tonalElevation = 2.dp
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .shadow(8.dp, RoundedCornerShape(30.dp)),
+        shape = RoundedCornerShape(30.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = .94f)
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Box(
+            Modifier
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.primary.copy(alpha = .13f),
+                            Color.Transparent,
+                            MaterialTheme.colorScheme.primary.copy(alpha = .07f)
+                        )
+                    )
+                )
+                .padding(horizontal = 16.dp, vertical = 16.dp)
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(3.dp))
-                Text(PersianDate.todayLong(), color = MaterialTheme.colorScheme.onSurface.copy(alpha = .60f), style = MaterialTheme.typography.bodySmall)
-                if (lastSavedEpoch > 0L) {
-                    Text("آخرین ذخیره: ${PersianDate.formatCompact(lastSavedEpoch)}", color = MaterialTheme.colorScheme.onSurface.copy(alpha = .42f), style = MaterialTheme.typography.labelMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            PersianDate.todayLong(),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = .60f),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text("  •  ", color = MaterialTheme.colorScheme.onSurface.copy(alpha = .35f))
+                        Text(
+                            "${appCount.toString().toPersianDigits()} برنامه",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
                 }
+
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = .10f)
+                ) {
+                    Text(
+                        time,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                FilledTonalIconButton(onClick = onAdd) { Icon(Icons.Rounded.Add, "افزودن برنامه") }
+                Spacer(Modifier.width(5.dp))
+                FilledTonalIconButton(onClick = onSettings) { Icon(Icons.Rounded.Settings, "تنظیمات") }
             }
-            AssistChip(onClick = {}, label = { Text("${appCount.toString().toPersianDigits()} برنامه") })
-            Spacer(Modifier.width(8.dp))
-            FilledTonalIconButton(onClick = onAdd) { Icon(Icons.Rounded.Add, "افزودن برنامه") }
-            Spacer(Modifier.width(6.dp))
-            FilledTonalIconButton(onClick = onSettings) { Icon(Icons.Rounded.Settings, "تنظیمات") }
         }
     }
 }
@@ -382,67 +417,122 @@ private fun EmptyPage(onAdd: () -> Unit) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AppTile(
     app: AppEntry,
     displayName: String,
     iconCache: LruCache<String, ImageBitmap>,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
+    iconSize: Int,
+    columns: Int,
     onLaunch: () -> Unit,
     onRename: (String) -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
+    onDragMove: (Int) -> Unit,
+    onDragFinished: () -> Unit,
     onRemove: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
+    var dragging by remember { mutableStateOf(false) }
+    var dragX by remember { mutableFloatStateOf(0f) }
+    var dragY by remember { mutableFloatStateOf(0f) }
     val context = LocalContext.current
     var icon by remember(app.packageName) { mutableStateOf(iconCache.get(app.packageName)) }
 
     LaunchedEffect(app.packageName) {
         if (icon == null) {
             val loaded = withContext(Dispatchers.IO) {
-                runCatching { loadAppIcon(context.applicationContext, app, 128).asImageBitmap() }.getOrNull()
+                runCatching { loadAppIcon(context.applicationContext, app, 144).asImageBitmap() }.getOrNull()
             }
-            loaded?.let {
-                iconCache.put(app.packageName, it)
-                icon = it
-            }
+            loaded?.let { iconCache.put(app.packageName, it); icon = it }
         }
     }
 
-    Column(
-        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onLaunch, onLongClick = { showMenu = true }),
-        horizontalAlignment = Alignment.CenterHorizontally
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .scale(if (dragging) 1.08f else 1f)
+            .pointerInput(app.packageName, columns) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = {
+                        dragging = true
+                        dragX = 0f
+                        dragY = 0f
+                    },
+                    onDragEnd = {
+                        dragging = false
+                        dragX = 0f
+                        dragY = 0f
+                        onDragFinished()
+                    },
+                    onDragCancel = {
+                        dragging = false
+                        dragX = 0f
+                        dragY = 0f
+                    },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        dragX += amount.x
+                        dragY += amount.y
+                        val threshold = 54.dp.toPx()
+                        if (kotlin.math.abs(dragY) >= threshold) {
+                            onDragMove(if (dragY > 0) columns else -columns)
+                            dragY = 0f
+                            dragX = 0f
+                        } else if (kotlin.math.abs(dragX) >= threshold) {
+                            onDragMove(if (dragX > 0) -1 else 1)
+                            dragX = 0f
+                        }
+                    }
+                )
+            }
     ) {
-        Surface(
-            modifier = Modifier.size(66.dp).shadow(3.dp, RoundedCornerShape(18.dp)),
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (icon != null) {
-                Image(icon!!, displayName, Modifier.fillMaxSize().padding(4.dp).clip(RoundedCornerShape(15.dp)))
-            } else {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(displayName.take(1), fontWeight = FontWeight.Bold, fontSize = 22.sp)
+            Surface(
+                onClick = onLaunch,
+                modifier = Modifier
+                    .size(iconSize.dp)
+                    .shadow(if (dragging) 10.dp else 3.dp, RoundedCornerShape((iconSize * 0.28f).dp)),
+                shape = RoundedCornerShape((iconSize * 0.28f).dp),
+                color = MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                if (icon != null) {
+                    Image(
+                        icon!!,
+                        displayName,
+                        Modifier.fillMaxSize().padding(3.dp).clip(RoundedCornerShape((iconSize * 0.22f).dp))
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(displayName.take(1), fontWeight = FontWeight.Bold, fontSize = (iconSize * .34f).sp)
+                    }
                 }
             }
+            Spacer(Modifier.height(7.dp))
+            Text(
+                displayName,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelLarge,
+                textAlign = TextAlign.Center
+            )
         }
-        Spacer(Modifier.height(7.dp))
-        Text(displayName, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center)
+
+        FilledTonalIconButton(
+            onClick = { showMenu = true },
+            modifier = Modifier.align(Alignment.TopEnd).size(28.dp)
+        ) {
+            Icon(Icons.Rounded.MoreVert, "گزینه‌های برنامه", modifier = Modifier.size(17.dp))
+        }
     }
 
     if (showMenu) {
         AppActionDialog(
             title = displayName,
-            canMoveUp = canMoveUp,
-            canMoveDown = canMoveDown,
             onDismiss = { showMenu = false },
             onRename = { showMenu = false; showRename = true },
-            onMoveUp = { showMenu = false; onMoveUp() },
-            onMoveDown = { showMenu = false; onMoveDown() },
             onRemove = { showMenu = false; onRemove() }
         )
     }
@@ -459,12 +549,8 @@ private fun AppTile(
 @Composable
 private fun AppActionDialog(
     title: String,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
     onDismiss: () -> Unit,
     onRename: () -> Unit,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit,
     onRemove: () -> Unit
 ) {
     AlertDialog(
@@ -472,12 +558,15 @@ private fun AppActionDialog(
         shape = RoundedCornerShape(32.dp),
         title = { Text(title, style = MaterialTheme.typography.titleLarge) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "برای جابه‌جایی، آیکون برنامه را نگه دارید و بکشید.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = .60f)
+                )
                 ActionRow(Icons.Rounded.Edit, "تغییر نام", onRename)
-                ActionRow(Icons.Rounded.ArrowUpward, "جابجایی به قبل", onMoveUp, canMoveUp)
-                ActionRow(Icons.Rounded.ArrowDownward, "جابجایی به بعد", onMoveDown, canMoveDown)
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                ActionRow(Icons.Rounded.Delete, "حذف از این بخش", onRemove, true, destructive = true)
+                ActionRow(Icons.Rounded.Delete, "حذف از این بخش", onRemove, destructive = true)
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("بستن") } }
@@ -489,10 +578,9 @@ private fun ActionRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     text: String,
     onClick: () -> Unit,
-    enabled: Boolean = true,
     destructive: Boolean = false
 ) {
-    TextButton(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, tint = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(14.dp))
@@ -502,7 +590,12 @@ private fun ActionRow(
 }
 
 @Composable
-private fun RenameAppDialog(currentName: String, originalName: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+private fun RenameAppDialog(
+    currentName: String,
+    originalName: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
     var value by remember(currentName) { mutableStateOf(currentName) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -626,35 +719,84 @@ private fun NewPageDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit) {
 @Composable
 private fun SettingsDialog(
     columns: Int,
+    iconSize: Int,
     pageTitle: String,
     canDeletePage: Boolean,
     onDismiss: () -> Unit,
     onColumns: (Int) -> Unit,
+    onIconSize: (Int) -> Unit,
     onRename: (String) -> Unit,
     onAddPage: () -> Unit,
     onDeletePage: () -> Unit
 ) {
     var title by remember(pageTitle) { mutableStateOf(pageTitle) }
+    var sizeValue by remember(iconSize) { mutableFloatStateOf(iconSize.toFloat()) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(30.dp),
+        shape = RoundedCornerShape(32.dp),
         title = { Text("تنظیمات بخش") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 OutlinedTextField(title, { title = it }, label = { Text("نام این بخش") }, singleLine = true)
-                Text("تعداد ستون‌ها", style = MaterialTheme.typography.titleMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    (3..6).forEach { count ->
-                        FilterChip(selected = columns == count, onClick = { onColumns(count) }, label = { Text(count.toString().toPersianDigits()) })
+
+                SettingsCard(title = "چیدمان و ظاهر") {
+                    Text("تعداد ستون‌ها", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        (3..6).forEach { count ->
+                            FilterChip(
+                                selected = columns == count,
+                                onClick = { onColumns(count) },
+                                label = { Text(count.toString().toPersianDigits()) }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("اندازه آیکون", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        Text("${sizeValue.toInt().toString().toPersianDigits()}dp", color = MaterialTheme.colorScheme.primary)
+                    }
+                    Slider(
+                        value = sizeValue,
+                        onValueChange = { sizeValue = it },
+                        onValueChangeFinished = { onIconSize(sizeValue.toInt()) },
+                        valueRange = 48f..84f,
+                        steps = 5
+                    )
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("کوچک", style = MaterialTheme.typography.labelMedium)
+                        Text("بزرگ", style = MaterialTheme.typography.labelMedium)
                     }
                 }
-                HorizontalDivider()
+
                 FilledTonalButton(onClick = onAddPage, modifier = Modifier.fillMaxWidth()) { Text("افزودن بخش جدید") }
-                TextButton(enabled = canDeletePage, onClick = onDeletePage, modifier = Modifier.fillMaxWidth()) { Text("حذف این بخش", color = MaterialTheme.colorScheme.error) }
+                TextButton(enabled = canDeletePage, onClick = onDeletePage, modifier = Modifier.fillMaxWidth()) {
+                    Text("حذف این بخش", color = MaterialTheme.colorScheme.error)
+                }
             }
         },
-        confirmButton = { Button(onClick = { if (title.isNotBlank()) onRename(title.trim()); onDismiss() }) { Text("ذخیره") } }
+        confirmButton = {
+            Button(onClick = {
+                if (title.isNotBlank()) onRename(title.trim())
+                onIconSize(sizeValue.toInt())
+                onDismiss()
+            }) { Text("ذخیره") }
+        }
     )
+}
+
+@Composable
+private fun SettingsCard(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .75f)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(12.dp))
+            content()
+        }
+    }
 }
 
 private fun queryLauncherApps(context: Context): List<AppEntry> {
@@ -709,9 +851,9 @@ private fun encodeAppCache(apps: List<AppEntry>): String {
     return array.toString()
 }
 
-private fun movePackage(list: SnapshotStateList<String>, packageName: String, delta: Int) {
+private fun movePackageBy(list: SnapshotStateList<String>, packageName: String, delta: Int) {
     val from = list.indexOf(packageName)
-    if (from < 0) return
+    if (from < 0 || list.isEmpty()) return
     val to = (from + delta).coerceIn(0, list.lastIndex)
     if (from == to) return
     val item = list.removeAt(from)
