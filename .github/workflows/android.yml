@@ -31,15 +31,16 @@ jobs:
       - name: Apply gesture UX patch
         run: python3 scripts/apply_gesture_ux.py
 
-      - name: Fix gesture imports
+      - name: Fix generated imports
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p = Path('app/src/main/java/com/ahbe/mylauncher/MainActivity.kt')
           s = p.read_text(encoding='utf-8')
           s = s.replace('import androidx.compose.ui.input.pointer.awaitFirstDown\n', '')
+          s = s.replace('import sh.calvin.reorderable.longPressDraggableHandle\n', '')
           imp = 'import androidx.compose.foundation.gestures.awaitFirstDown\n'
-          if imp not in s:
+          if 'awaitFirstDown(' in s and imp not in s:
               s = s.replace(
                   'import androidx.compose.foundation.gestures.awaitEachGesture\n',
                   'import androidx.compose.foundation.gestures.awaitEachGesture\n' + imp
