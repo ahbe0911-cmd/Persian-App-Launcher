@@ -25,7 +25,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -205,12 +204,13 @@ private fun MyLauncherApp() {
 @Composable
 private fun AppTile(app: AppEntry, onLaunch: () -> Unit, onRemove: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
+    val context = LocalContext.current
     Column(
         modifier = Modifier.combinedClickable(onClick = onLaunch, onLongClick = { menu = true }),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box {
-            val drawable = remember(app.packageName) { app.resolveInfo.loadIcon(LocalContext.current.packageManager) }
+            val drawable = remember(app.packageName) { app.resolveInfo.loadIcon(context.packageManager) }
             Image(
                 bitmap = remember(drawable) { drawableToBitmap(drawable).asImageBitmap() },
                 contentDescription = app.label,
