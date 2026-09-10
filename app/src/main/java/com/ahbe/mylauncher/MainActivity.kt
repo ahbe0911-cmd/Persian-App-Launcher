@@ -14,11 +14,12 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -26,6 +27,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,6 +37,9 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -45,6 +52,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+
+private const val PREFS_NAME = "launcher_state"
+private const val KEY_PAGES = "pages"
+private const val KEY_COLUMNS = "columns"
+private const val KEY_LAST_SAVED = "last_saved_epoch"
 
 private data class AppEntry(
     val label: String,
@@ -59,158 +71,149 @@ private class LauncherPage(title: String, val packages: SnapshotStateList<String
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MyLauncherApp() }
+        setContent { LauncherRoot() }
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MyLauncherApp() {
+private fun LauncherRoot() {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("launcher_state", Context.MODE_PRIVATE) }
-
+    val prefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
     val pages = remember {
-        val savedPages = loadPages(prefs.getString("pages", null))
-        (if (savedPages.isEmpty()) listOf(LauncherPage("برنامه‌های من", mutableStateListOf())) else savedPages)
-            .toMutableStateList()
+        val restored = loadPages(prefs.getString(KEY_PAGES, null))
+        (restored.ifEmpty { listOf(LauncherPage("برنامه‌های من", mutableStateListOf())) }).toMutableStateList()
     }
 
     var installedApps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
     var isLoadingApps by remember { mutableStateOf(true) }
-    var columns by remember { mutableIntStateOf(prefs.getInt("columns", 4).coerceIn(3, 6)) }
+    var columns by remember { mutableIntStateOf(prefs.getInt(KEY_COLUMNS, 4).coerceIn(3, 6)) }
+    var lastSavedEpoch by remember { mutableLongStateOf(prefs.getLong(KEY_LAST_SAVED, 0L)) }
     var showAppPicker by remember { mutableStateOf(false) }
     var showNewPage by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
 
     val pagerState = rememberPagerState(pageCount = { pages.size })
     val scope = rememberCoroutineScope()
-    val iconCache = remember { LruCache<String, ImageBitmap>(96) }
-
-    val appsByPackage = remember(installedApps) { installedApps.associateBy { it.packageName } }
+    val iconCache = remember { LruCache<String, ImageBitmap>(128) }
+    val appsByPackage = remember(installedApps) { installedApps.associateBy(AppEntry::packageName) }
 
     fun persist() {
+        val now = System.currentTimeMillis()
+        lastSavedEpoch = now
         prefs.edit()
-            .putString("pages", encodePages(pages))
-            .putInt("columns", columns)
+            .putString(KEY_PAGES, encodePages(pages))
+            .putInt(KEY_COLUMNS, columns)
+            .putLong(KEY_LAST_SAVED, now)
             .apply()
     }
 
     LaunchedEffect(Unit) {
-        if (prefs.getString("pages", null).isNullOrBlank()) persist()
-        installedApps = withContext(Dispatchers.Default) { queryLauncherApps(context) }
+        if (prefs.getString(KEY_PAGES, null).isNullOrBlank()) persist()
+        val loaded = withContext(Dispatchers.Default) { queryLauncherApps(context) }
+        installedApps = loaded
+        val validPackages = loaded.asSequence().map(AppEntry::packageName).toHashSet()
+        var changed = false
+        pages.forEach { page ->
+            val invalid = page.packages.filterNot(validPackages::contains)
+            if (invalid.isNotEmpty()) {
+                page.packages.removeAll(invalid.toSet())
+                changed = true
+            }
+        }
+        if (changed) persist()
         isLoadingApps = false
     }
 
+    val dark = isSystemInDarkTheme()
+    val colors = if (dark) {
+        darkColorScheme(
+            primary = Color(0xFF9EB4FF),
+            background = Color(0xFF101218),
+            surface = Color(0xFF191C24),
+            surfaceVariant = Color(0xFF252A35)
+        )
+    } else {
+        lightColorScheme(
+            primary = Color(0xFF3156D3),
+            background = Color(0xFFF5F7FC),
+            surface = Color(0xFFFFFFFF),
+            surfaceVariant = Color(0xFFE9EDF7)
+        )
+    }
+
     MaterialTheme(
-        colorScheme = lightColorScheme(
-            primary = androidx.compose.ui.graphics.Color(0xFF3457D5),
-            background = androidx.compose.ui.graphics.Color(0xFFF6F7FB),
-            surface = androidx.compose.ui.graphics.Color.White,
-            onSurface = androidx.compose.ui.graphics.Color(0xFF20232A)
-        ),
+        colorScheme = colors,
         typography = Typography(
-            titleLarge = androidx.compose.ui.text.TextStyle(fontWeight = FontWeight.Bold, fontSize = 23.sp),
+            titleLarge = androidx.compose.ui.text.TextStyle(fontWeight = FontWeight.Bold, fontSize = 24.sp),
+            titleMedium = androidx.compose.ui.text.TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 16.sp),
             bodyMedium = androidx.compose.ui.text.TextStyle(fontSize = 14.sp)
         )
     ) {
-        Scaffold(
-            containerColor = MaterialTheme.colorScheme.background,
-            topBar = {
-                Surface(shadowElevation = 0.dp, color = MaterialTheme.colorScheme.background) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .statusBarsPadding()
-                            .padding(horizontal = 18.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text(
-                                pages.getOrNull(pagerState.currentPage)?.title ?: "لانچر من",
-                                style = MaterialTheme.typography.titleLarge
-                            )
-                            Text(
-                                "لانچر من",
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = .48f),
-                                fontSize = 12.sp
-                            )
-                        }
-                        Row {
-                            IconButton(
-                                enabled = !isLoadingApps,
-                                onClick = { showAppPicker = true }
-                            ) { Icon(Icons.Rounded.Add, "افزودن برنامه") }
-                            IconButton(onClick = { showSettings = true }) {
-                                Icon(Icons.Rounded.Settings, "تنظیمات")
-                            }
-                        }
-                    }
-                }
-            }
-        ) { inner ->
-            Column(Modifier.fillMaxSize().padding(inner)) {
-                if (isLoadingApps) {
-                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
-                } else {
-                    HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { pageIndex ->
-                        val page = pages.getOrNull(pageIndex) ?: return@HorizontalPager
-                        val entries = remember(page.packages.toList(), appsByPackage) {
-                            page.packages.mapNotNull(appsByPackage::get)
-                        }
+        val gradient = if (dark) {
+            Brush.verticalGradient(listOf(Color(0xFF101218), Color(0xFF171B24)))
+        } else {
+            Brush.verticalGradient(listOf(Color(0xFFF9FAFF), Color(0xFFF0F4FB)))
+        }
 
-                        if (entries.isEmpty()) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text("این صفحه هنوز خالی است", fontWeight = FontWeight.Medium)
-                                    Spacer(Modifier.height(8.dp))
-                                    FilledTonalButton(onClick = { showAppPicker = true }) {
-                                        Text("افزودن برنامه")
+        Scaffold(containerColor = Color.Transparent) { inner ->
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .background(gradient)
+                    .padding(inner)
+            ) {
+                Header(
+                    title = pages.getOrNull(pagerState.currentPage)?.title ?: "لانچر من",
+                    lastSavedEpoch = lastSavedEpoch,
+                    isLoading = isLoadingApps,
+                    onAdd = { if (!isLoadingApps) showAppPicker = true },
+                    onSettings = { showSettings = true }
+                )
+
+                HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { pageIndex ->
+                    val page = pages.getOrNull(pageIndex) ?: return@HorizontalPager
+                    val packageSnapshot = page.packages.toList()
+                    val entries = remember(packageSnapshot, appsByPackage) {
+                        packageSnapshot.mapNotNull(appsByPackage::get)
+                    }
+
+                    when {
+                        isLoadingApps && entries.isEmpty() -> LoadingPage()
+                        entries.isEmpty() -> EmptyPage { showAppPicker = true }
+                        else -> LazyVerticalGrid(
+                            columns = GridCells.Fixed(columns),
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
+                            verticalArrangement = Arrangement.spacedBy(18.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            itemsIndexed(entries, key = { _, item -> item.packageName }) { index, item ->
+                                AppTile(
+                                    app = item,
+                                    iconCache = iconCache,
+                                    canMoveBack = index > 0,
+                                    canMoveForward = index < entries.lastIndex,
+                                    onLaunch = { launchApp(context, item.packageName) },
+                                    onMoveBack = {
+                                        movePackage(page.packages, item.packageName, -1)
+                                        persist()
+                                    },
+                                    onMoveForward = {
+                                        movePackage(page.packages, item.packageName, 1)
+                                        persist()
+                                    },
+                                    onRemove = {
+                                        page.packages.remove(item.packageName)
+                                        persist()
                                     }
-                                }
-                            }
-                        } else {
-                            LazyVerticalGrid(
-                                columns = GridCells.Fixed(columns),
-                                modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
-                                contentPadding = PaddingValues(top = 12.dp, bottom = 20.dp),
-                                verticalArrangement = Arrangement.spacedBy(18.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(entries, key = { it.packageName }) { item ->
-                                    AppTile(
-                                        app = item,
-                                        iconCache = iconCache,
-                                        onLaunch = { launchApp(context, item.packageName) },
-                                        onRemove = {
-                                            page.packages.remove(item.packageName)
-                                            persist()
-                                        }
-                                    )
-                                }
+                                )
                             }
                         }
                     }
                 }
 
-                Row(
-                    Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    pages.forEachIndexed { index, _ ->
-                        val selected = index == pagerState.currentPage
-                        Box(
-                            Modifier
-                                .padding(horizontal = 4.dp)
-                                .size(if (selected) 9.dp else 6.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = if (selected) 1f else .25f))
-                        )
-                    }
-                }
+                PageIndicator(pageCount = pages.size, currentPage = pagerState.currentPage)
             }
         }
 
@@ -218,12 +221,13 @@ private fun MyLauncherApp() {
             val page = pages.getOrNull(pagerState.currentPage)
             AppPickerDialog(
                 apps = installedApps,
-                selected = page?.packages?.toSet().orEmpty(),
+                currentOrder = page?.packages?.toList().orEmpty(),
+                iconCache = iconCache,
                 onDismiss = { showAppPicker = false },
                 onApply = { selected ->
                     page?.packages?.apply {
                         clear()
-                        addAll(selected.distinct())
+                        addAll(selected)
                     }
                     persist()
                     showAppPicker = false
@@ -246,17 +250,17 @@ private fun MyLauncherApp() {
                 pageTitle = pages.getOrNull(pagerState.currentPage)?.title.orEmpty(),
                 canDeletePage = pages.size > 1,
                 onDismiss = { showSettings = false },
-                onColumns = { newColumns ->
-                    val safeColumns = newColumns.coerceIn(3, 6)
-                    if (safeColumns != columns) {
-                        columns = safeColumns
+                onColumns = { newValue ->
+                    val safe = newValue.coerceIn(3, 6)
+                    if (safe != columns) {
+                        columns = safe
                         persist()
                     }
                 },
                 onRename = { title ->
                     pages.getOrNull(pagerState.currentPage)?.let { page ->
-                        if (page.title != title) {
-                            page.title = title
+                        if (title.isNotBlank() && page.title != title) {
+                            page.title = title.trim()
                             persist()
                         }
                     }
@@ -270,13 +274,92 @@ private fun MyLauncherApp() {
                         val index = pagerState.currentPage.coerceIn(0, pages.lastIndex)
                         pages.removeAt(index)
                         persist()
-                        scope.launch {
-                            pagerState.scrollToPage(index.coerceAtMost(pages.lastIndex))
-                        }
+                        scope.launch { pagerState.scrollToPage(index.coerceAtMost(pages.lastIndex)) }
                     }
                     showSettings = false
                 }
             )
+        }
+    }
+}
+
+@Composable
+private fun Header(
+    title: String,
+    lastSavedEpoch: Long,
+    isLoading: Boolean,
+    onAdd: () -> Unit,
+    onSettings: () -> Unit
+) {
+    Surface(color = Color.Transparent) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(horizontal = 18.dp, vertical = 10.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        PersianDate.todayLong(),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = .62f),
+                        fontSize = 12.sp
+                    )
+                    if (lastSavedEpoch > 0L) {
+                        Text(
+                            "آخرین ذخیره: ${PersianDate.formatCompact(lastSavedEpoch)}",
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = .42f),
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+                FilledTonalIconButton(onClick = onAdd, enabled = !isLoading) {
+                    Icon(Icons.Rounded.Add, contentDescription = "افزودن برنامه")
+                }
+                Spacer(Modifier.width(8.dp))
+                FilledTonalIconButton(onClick = onSettings) {
+                    Icon(Icons.Rounded.Settings, contentDescription = "تنظیمات")
+                }
+            }
+            if (isLoading) {
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun LoadingPage() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text("در حال آماده‌سازی برنامه‌ها…", color = MaterialTheme.colorScheme.onSurface.copy(alpha = .55f))
+    }
+}
+
+@Composable
+private fun EmptyPage(onAdd: () -> Unit) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = .8f),
+            tonalElevation = 2.dp
+        ) {
+            Column(
+                Modifier.padding(horizontal = 30.dp, vertical = 26.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("این صفحه خالی است", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+                Text("برنامه‌های دلخواهت را به این صفحه اضافه کن", fontSize = 12.sp)
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onAdd) {
+                    Icon(Icons.Rounded.Add, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("افزودن برنامه")
+                }
+            }
         }
     }
 }
@@ -286,7 +369,11 @@ private fun MyLauncherApp() {
 private fun AppTile(
     app: AppEntry,
     iconCache: LruCache<String, ImageBitmap>,
+    canMoveBack: Boolean,
+    canMoveForward: Boolean,
     onLaunch: () -> Unit,
+    onMoveBack: () -> Unit,
+    onMoveForward: () -> Unit,
     onRemove: () -> Unit
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -296,69 +383,108 @@ private fun AppTile(
     LaunchedEffect(app.packageName) {
         if (icon == null) {
             val loaded = withContext(Dispatchers.Default) {
-                val drawable = app.resolveInfo.loadIcon(context.packageManager)
-                drawableToBitmap(drawable, 128).asImageBitmap()
+                runCatching {
+                    val drawable = app.resolveInfo.loadIcon(context.packageManager)
+                    drawableToBitmap(drawable, 144).asImageBitmap()
+                }.getOrNull()
             }
-            iconCache.put(app.packageName, loaded)
-            icon = loaded
+            loaded?.let {
+                iconCache.put(app.packageName, it)
+                icon = it
+            }
         }
     }
 
     Column(
-        modifier = Modifier.combinedClickable(onClick = onLaunch, onLongClick = { menu = true }),
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onLaunch, onLongClick = { menu = true }),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(contentAlignment = Alignment.Center) {
-            if (icon != null) {
-                Image(
-                    bitmap = icon!!,
-                    contentDescription = app.label,
-                    modifier = Modifier.size(62.dp).clip(RoundedCornerShape(16.dp))
-                )
-            } else {
-                Box(
-                    Modifier
-                        .size(62.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                )
+            Surface(
+                modifier = Modifier.size(68.dp).shadow(4.dp, RoundedCornerShape(19.dp)),
+                shape = RoundedCornerShape(19.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                if (icon != null) {
+                    Image(
+                        bitmap = icon!!,
+                        contentDescription = app.label,
+                        modifier = Modifier.fillMaxSize().padding(4.dp).clip(RoundedCornerShape(16.dp))
+                    )
+                } else {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(app.label.take(1), fontWeight = FontWeight.Bold, fontSize = 22.sp)
+                    }
+                }
             }
-
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 DropdownMenuItem(
+                    text = { Text("جابه‌جایی به قبل") },
+                    enabled = canMoveBack,
+                    leadingIcon = { Icon(Icons.Rounded.ArrowForward, null) },
+                    onClick = { menu = false; onMoveBack() }
+                )
+                DropdownMenuItem(
+                    text = { Text("جابه‌جایی به بعد") },
+                    enabled = canMoveForward,
+                    leadingIcon = { Icon(Icons.Rounded.ArrowBack, null) },
+                    onClick = { menu = false; onMoveForward() }
+                )
+                DropdownMenuItem(
                     text = { Text("حذف از صفحه") },
-                    onClick = {
-                        menu = false
-                        onRemove()
-                    }
+                    leadingIcon = { Icon(Icons.Rounded.Delete, null) },
+                    onClick = { menu = false; onRemove() }
                 )
             }
         }
-        Spacer(Modifier.height(7.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
             app.label,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            fontSize = 13.sp
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.Medium
         )
+    }
+}
+
+@Composable
+private fun PageIndicator(pageCount: Int, currentPage: Int) {
+    Row(
+        Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 10.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        repeat(pageCount) { index ->
+            val selected = index == currentPage
+            Box(
+                Modifier
+                    .padding(horizontal = 4.dp)
+                    .size(width = if (selected) 20.dp else 7.dp, height = 7.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = if (selected) 1f else .25f))
+            )
+        }
     }
 }
 
 @Composable
 private fun AppPickerDialog(
     apps: List<AppEntry>,
-    selected: Set<String>,
+    currentOrder: List<String>,
+    iconCache: LruCache<String, ImageBitmap>,
     onDismiss: () -> Unit,
     onApply: (List<String>) -> Unit
 ) {
-    val picked = remember(selected) { mutableStateMapOf<String, Boolean>().apply { selected.forEach { put(it, true) } } }
+    val selected = remember(currentOrder) { currentOrder.toMutableSet().toMutableStateList() }
     var query by remember { mutableStateOf("") }
-    val normalizedQuery = remember(query) { query.trim() }
-    val filtered = remember(normalizedQuery, apps) {
-        if (normalizedQuery.isEmpty()) apps
+    val normalized = remember(query) { query.trim() }
+    val filtered = remember(normalized, apps) {
+        if (normalized.isEmpty()) apps
         else apps.filter {
-            it.label.contains(normalizedQuery, ignoreCase = true) ||
-                it.packageName.contains(normalizedQuery, ignoreCase = true)
+            it.label.contains(normalized, true) || it.packageName.contains(normalized, true)
         }
     }
 
@@ -366,29 +492,36 @@ private fun AppPickerDialog(
         onDismissRequest = onDismiss,
         title = { Text("انتخاب برنامه‌ها") },
         text = {
-            Column(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
+            Column(Modifier.fillMaxWidth().heightIn(max = 540.dp)) {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    placeholder = { Text("جستجوی برنامه") }
+                    placeholder = { Text("جستجوی نام یا شناسه برنامه") },
+                    shape = RoundedCornerShape(18.dp)
                 )
-                Spacer(Modifier.height(8.dp))
-                LazyColumn {
+                Spacer(Modifier.height(10.dp))
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     items(filtered, key = { it.packageName }) { app ->
-                        val checked = picked[app.packageName] == true
+                        val checked = app.packageName in selected
                         Row(
                             Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            MiniAppIcon(app, iconCache)
+                            Spacer(Modifier.width(10.dp))
+                            Text(app.label, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Checkbox(
                                 checked = checked,
                                 onCheckedChange = { value ->
-                                    if (value) picked[app.packageName] = true else picked.remove(app.packageName)
+                                    if (value) {
+                                        if (app.packageName !in selected) selected += app.packageName
+                                    } else {
+                                        selected.remove(app.packageName)
+                                    }
                                 }
                             )
-                            Text(app.label, modifier = Modifier.weight(1f))
                         }
                     }
                 }
@@ -396,15 +529,38 @@ private fun AppPickerDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                val selectedInDisplayOrder = apps.asSequence()
-                    .map { it.packageName }
-                    .filter { picked[it] == true }
+                val selectedSet = selected.toHashSet()
+                val retained = currentOrder.filter(selectedSet::contains)
+                val retainedSet = retained.toHashSet()
+                val newlyAdded = apps.asSequence()
+                    .map(AppEntry::packageName)
+                    .filter { it in selectedSet && it !in retainedSet }
                     .toList()
-                onApply(selectedInDisplayOrder)
+                onApply(retained + newlyAdded)
             }) { Text("ذخیره") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
     )
+}
+
+@Composable
+private fun MiniAppIcon(app: AppEntry, iconCache: LruCache<String, ImageBitmap>) {
+    val context = LocalContext.current
+    var icon by remember(app.packageName) { mutableStateOf(iconCache.get(app.packageName)) }
+    LaunchedEffect(app.packageName) {
+        if (icon == null) {
+            val loaded = withContext(Dispatchers.Default) {
+                runCatching {
+                    drawableToBitmap(app.resolveInfo.loadIcon(context.packageManager), 96).asImageBitmap()
+                }.getOrNull()
+            }
+            loaded?.let { iconCache.put(app.packageName, it); icon = it }
+        }
+    }
+    Surface(Modifier.size(40.dp), shape = RoundedCornerShape(11.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+        if (icon != null) Image(icon!!, app.label, Modifier.fillMaxSize().padding(2.dp).clip(RoundedCornerShape(9.dp)))
+        else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(app.label.take(1), fontWeight = FontWeight.Bold) }
+    }
 }
 
 @Composable
@@ -413,20 +569,8 @@ private fun NewPageDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("صفحه جدید") },
-        text = {
-            OutlinedTextField(
-                value = title,
-                onValueChange = { title = it },
-                label = { Text("نام صفحه") },
-                singleLine = true
-            )
-        },
-        confirmButton = {
-            TextButton(
-                enabled = title.isNotBlank(),
-                onClick = { onCreate(title.trim()) }
-            ) { Text("ساخت") }
-        },
+        text = { OutlinedTextField(title, { title = it }, label = { Text("نام صفحه") }, singleLine = true) },
+        confirmButton = { TextButton(enabled = title.isNotBlank(), onClick = { onCreate(title.trim()) }) { Text("ساخت") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
     )
 }
@@ -445,42 +589,22 @@ private fun SettingsDialog(
     var title by remember(pageTitle) { mutableStateOf(pageTitle) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("تنظیمات") },
+        title = { Text("تنظیمات صفحه") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("نام این صفحه") },
-                    singleLine = true
-                )
-                Text("تعداد ستون‌ها")
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                OutlinedTextField(title, { title = it }, label = { Text("نام این صفحه") }, singleLine = true)
+                Text("تعداد ستون‌ها", fontWeight = FontWeight.SemiBold)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     (3..6).forEach { count ->
-                        FilterChip(
-                            selected = columns == count,
-                            onClick = { onColumns(count) },
-                            label = { Text(count.toString()) }
-                        )
+                        FilterChip(selected = columns == count, onClick = { onColumns(count) }, label = { Text(count.toString().toPersianDigits()) })
                     }
                 }
                 HorizontalDivider()
-                TextButton(onClick = onAddPage, modifier = Modifier.fillMaxWidth()) {
-                    Text("افزودن صفحه جدید")
-                }
-                TextButton(
-                    enabled = canDeletePage,
-                    onClick = onDeletePage,
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("حذف این صفحه") }
+                FilledTonalButton(onClick = onAddPage, modifier = Modifier.fillMaxWidth()) { Text("افزودن صفحه جدید") }
+                TextButton(enabled = canDeletePage, onClick = onDeletePage, modifier = Modifier.fillMaxWidth()) { Text("حذف این صفحه") }
             }
         },
-        confirmButton = {
-            TextButton(onClick = {
-                if (title.isNotBlank()) onRename(title.trim())
-                onDismiss()
-            }) { Text("ذخیره") }
-        }
+        confirmButton = { TextButton(onClick = { if (title.isNotBlank()) onRename(title.trim()); onDismiss() }) { Text("ذخیره") } }
     )
 }
 
@@ -493,7 +617,7 @@ private fun queryLauncherApps(context: Context): List<AppEntry> {
         .distinctBy { it.activityInfo.packageName }
         .map {
             AppEntry(
-                label = it.loadLabel(packageManager).toString(),
+                label = runCatching { it.loadLabel(packageManager).toString() }.getOrDefault(it.activityInfo.packageName),
                 packageName = it.activityInfo.packageName,
                 resolveInfo = it
             )
@@ -503,17 +627,25 @@ private fun queryLauncherApps(context: Context): List<AppEntry> {
 }
 
 private fun launchApp(context: Context, packageName: String) {
-    val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return
-    runCatching { context.startActivity(launchIntent) }
+    val intent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return
+    runCatching { context.startActivity(intent) }
+}
+
+private fun movePackage(list: SnapshotStateList<String>, packageName: String, delta: Int) {
+    val from = list.indexOf(packageName)
+    if (from < 0) return
+    val to = (from + delta).coerceIn(0, list.lastIndex)
+    if (from == to) return
+    val item = list.removeAt(from)
+    list.add(to, item)
 }
 
 private fun drawableToBitmap(drawable: Drawable, maxSizePx: Int): Bitmap {
-    val intrinsicWidth = drawable.intrinsicWidth.coerceAtLeast(1)
-    val intrinsicHeight = drawable.intrinsicHeight.coerceAtLeast(1)
-    val scale = minOf(1f, maxSizePx.toFloat() / maxOf(intrinsicWidth, intrinsicHeight))
-    val width = (intrinsicWidth * scale).toInt().coerceAtLeast(1)
-    val height = (intrinsicHeight * scale).toInt().coerceAtLeast(1)
-
+    val iw = drawable.intrinsicWidth.coerceAtLeast(1)
+    val ih = drawable.intrinsicHeight.coerceAtLeast(1)
+    val scale = minOf(1f, maxSizePx.toFloat() / maxOf(iw, ih))
+    val width = (iw * scale).toInt().coerceAtLeast(1)
+    val height = (ih * scale).toInt().coerceAtLeast(1)
     return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
         val canvas = Canvas(bitmap)
         drawable.setBounds(0, 0, canvas.width, canvas.height)
@@ -522,22 +654,14 @@ private fun drawableToBitmap(drawable: Drawable, maxSizePx: Int): Bitmap {
 }
 
 private fun loadPages(raw: String?): List<LauncherPage> = try {
-    if (raw.isNullOrBlank()) {
-        emptyList()
-    } else {
+    if (raw.isNullOrBlank()) emptyList() else {
         val array = JSONArray(raw)
         List(array.length()) { index ->
             val obj = array.getJSONObject(index)
-            val packages = obj.optJSONArray("packages") ?: JSONArray()
-            val uniquePackages = LinkedHashSet<String>()
-            repeat(packages.length()) { packageIndex ->
-                val packageName = packages.optString(packageIndex)
-                if (packageName.isNotBlank()) uniquePackages += packageName
-            }
-            LauncherPage(
-                obj.optString("title", "صفحه").ifBlank { "صفحه" },
-                uniquePackages.toList().toMutableStateList()
-            )
+            val source = obj.optJSONArray("packages") ?: JSONArray()
+            val unique = LinkedHashSet<String>()
+            repeat(source.length()) { i -> source.optString(i).takeIf(String::isNotBlank)?.let(unique::add) }
+            LauncherPage(obj.optString("title", "صفحه").ifBlank { "صفحه" }, unique.toList().toMutableStateList())
         }
     }
 } catch (_: Exception) {
@@ -545,15 +669,11 @@ private fun loadPages(raw: String?): List<LauncherPage> = try {
 }
 
 private fun encodePages(pages: List<LauncherPage>): String {
-    val array = JSONArray()
+    val result = JSONArray()
     pages.forEach { page ->
         val packages = JSONArray()
-        page.packages.distinct().forEach { packages.put(it) }
-        array.put(
-            JSONObject()
-                .put("title", page.title.ifBlank { "صفحه" })
-                .put("packages", packages)
-        )
+        page.packages.distinct().forEach(packages::put)
+        result.put(JSONObject().put("title", page.title.ifBlank { "صفحه" }).put("packages", packages))
     }
-    return array.toString()
+    return result.toString()
 }
