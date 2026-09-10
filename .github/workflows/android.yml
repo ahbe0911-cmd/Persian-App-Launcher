@@ -31,6 +31,21 @@ jobs:
       - name: Apply gesture UX patch
         run: python3 scripts/apply_gesture_ux.py
 
+      - name: Fix gesture imports
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/ahbe/mylauncher/MainActivity.kt')
+          s = p.read_text(encoding='utf-8')
+          imp = 'import androidx.compose.foundation.gestures.awaitFirstDown\n'
+          if imp not in s:
+              s = s.replace(
+                  'import androidx.compose.foundation.gestures.awaitEachGesture\n',
+                  'import androidx.compose.foundation.gestures.awaitEachGesture\n' + imp
+              )
+          p.write_text(s, encoding='utf-8')
+          PY
+
       - name: Download Vazirmatn font
         run: |
           mkdir -p app/src/main/res/font
