@@ -57,6 +57,7 @@ private const val PREFS_NAME = "launcher_state"
 private const val KEY_PAGES = "pages"
 private const val KEY_COLUMNS = "columns"
 private const val KEY_LAST_SAVED = "last_saved_epoch"
+private const val KEY_APP_CACHE = "app_cache_v1"
 
 @Immutable
 private data class AppEntry(
@@ -81,27 +82,29 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun LauncherRoot() {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
-    val storedState = remember {
+    val appContext = context.applicationContext
+    val prefs = remember { appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+
+    val storedPages = remember {
         val raw = prefs.getString(KEY_PAGES, null)
         val restored = loadPages(raw)
         Triple(raw, restored, restored.isEmpty() && !raw.isNullOrBlank())
     }
     val pages = remember {
-        storedState.second
+        storedPages.second
             .ifEmpty { listOf(LauncherPage("برنامه‌های من", mutableStateListOf())) }
             .toMutableStateList()
     }
 
-    var installedApps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
-    var isLoadingApps by remember { mutableStateOf(true) }
-    var appLoadFailed by remember { mutableStateOf(false) }
-    var reloadAppsKey by remember { mutableIntStateOf(0) }
+    var installedApps by remember {
+        mutableStateOf(loadAppCache(prefs.getString(KEY_APP_CACHE, null)))
+    }
     var columns by remember { mutableIntStateOf(prefs.getInt(KEY_COLUMNS, 4).coerceIn(3, 6)) }
     var lastSavedEpoch by remember { mutableLongStateOf(prefs.getLong(KEY_LAST_SAVED, 0L)) }
     var showAppPicker by remember { mutableStateOf(false) }
     var showNewPage by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var refreshKey by remember { mutableIntStateOf(0) }
 
     val pagerState = rememberPagerState(pageCount = { pages.size })
     val scope = rememberCoroutineScope()
@@ -118,22 +121,15 @@ private fun LauncherRoot() {
             .apply()
     }
 
-    LaunchedEffect(reloadAppsKey) {
-        isLoadingApps = true
-        appLoadFailed = false
-        if (storedState.first.isNullOrBlank() || storedState.third) persist()
+    LaunchedEffect(refreshKey) {
+        if (storedPages.first.isNullOrBlank() || storedPages.third) persist()
 
-        val result = withContext(Dispatchers.IO) {
-            runCatching { queryLauncherApps(context.applicationContext) }
-        }
-        result.onSuccess { loaded ->
+        withContext(Dispatchers.IO) {
+            runCatching { queryLauncherApps(appContext) }
+        }.onSuccess { loaded ->
             installedApps = loaded
-            appLoadFailed = false
-        }.onFailure {
-            // A transient PackageManager failure must never erase the user's saved layout.
-            appLoadFailed = true
+            prefs.edit().putString(KEY_APP_CACHE, encodeAppCache(loaded)).apply()
         }
-        isLoadingApps = false
     }
 
     val dark = isSystemInDarkTheme()
@@ -177,23 +173,27 @@ private fun LauncherRoot() {
                 Header(
                     title = pages.getOrNull(pagerState.currentPage)?.title ?: "لانچر من",
                     lastSavedEpoch = lastSavedEpoch,
-                    isLoading = isLoadingApps,
-                    appLoadFailed = appLoadFailed,
-                    onAdd = { if (!isLoadingApps && !appLoadFailed) showAppPicker = true },
+                    onAdd = { showAppPicker = true },
                     onSettings = { showSettings = true }
                 )
 
                 HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { pageIndex ->
                     val page = pages.getOrNull(pageIndex) ?: return@HorizontalPager
-                    val entries by remember(page, appsByPackage) {
-                        derivedStateOf { page.packages.mapNotNull(appsByPackage::get) }
+                    val packageSnapshot = page.packages.toList()
+                    val entries = remember(packageSnapshot, appsByPackage) {
+                        packageSnapshot.map { packageName ->
+                            appsByPackage[packageName] ?: AppEntry(
+                                label = packageName.substringAfterLast('.').ifBlank { "برنامه" },
+                                packageName = packageName,
+                                activityName = ""
+                            )
+                        }
                     }
 
-                    when {
-                        isLoadingApps && entries.isEmpty() -> LoadingPage()
-                        appLoadFailed && installedApps.isEmpty() -> AppLoadErrorPage { reloadAppsKey++ }
-                        entries.isEmpty() -> EmptyPage { if (!appLoadFailed) showAppPicker = true }
-                        else -> LazyVerticalGrid(
+                    if (entries.isEmpty()) {
+                        EmptyPage { showAppPicker = true }
+                    } else {
+                        LazyVerticalGrid(
                             columns = GridCells.Fixed(columns),
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
@@ -235,6 +235,7 @@ private fun LauncherRoot() {
                 apps = installedApps,
                 currentOrder = page?.packages?.toList().orEmpty(),
                 iconCache = iconCache,
+                onRefresh = { refreshKey++ },
                 onDismiss = { showAppPicker = false },
                 onApply = { selected ->
                     page?.packages?.apply {
@@ -300,93 +301,43 @@ private fun LauncherRoot() {
 private fun Header(
     title: String,
     lastSavedEpoch: Long,
-    isLoading: Boolean,
-    appLoadFailed: Boolean,
     onAdd: () -> Unit,
     onSettings: () -> Unit
 ) {
-    Surface(color = Color.Transparent) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 18.dp, vertical = 10.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 18.dp, vertical = 10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    PersianDate.todayLong(),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = .62f),
+                    fontSize = 12.sp
+                )
+                if (lastSavedEpoch > 0L) {
                     Text(
-                        title,
-                        style = MaterialTheme.typography.titleLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        "آخرین ذخیره: ${PersianDate.formatCompact(lastSavedEpoch)}",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = .42f),
+                        fontSize = 10.sp
                     )
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        PersianDate.todayLong(),
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = .62f),
-                        fontSize = 12.sp
-                    )
-                    if (lastSavedEpoch > 0L) {
-                        Text(
-                            "آخرین ذخیره: ${PersianDate.formatCompact(lastSavedEpoch)}",
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = .42f),
-                            fontSize = 10.sp
-                        )
-                    }
-                }
-                FilledTonalIconButton(onClick = onAdd, enabled = !isLoading && !appLoadFailed) {
-                    Icon(Icons.Rounded.Add, contentDescription = "افزودن برنامه")
-                }
-                Spacer(Modifier.width(8.dp))
-                FilledTonalIconButton(onClick = onSettings) {
-                    Icon(Icons.Rounded.Settings, contentDescription = "تنظیمات")
                 }
             }
-            if (isLoading) {
-                Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
-            } else if (appLoadFailed) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "خواندن فهرست برنامه‌ها ناموفق بود؛ چیدمان ذخیره‌شده دست‌نخورده باقی ماند.",
-                    color = MaterialTheme.colorScheme.error,
-                    fontSize = 11.sp
-                )
+            FilledTonalIconButton(onClick = onAdd) {
+                Icon(Icons.Rounded.Add, contentDescription = "افزودن برنامه")
             }
-        }
-    }
-}
-
-@Composable
-private fun LoadingPage() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(
-            "در حال آماده‌سازی برنامه‌ها…",
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = .55f)
-        )
-    }
-}
-
-@Composable
-private fun AppLoadErrorPage(onRetry: () -> Unit) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = .72f)
-        ) {
-            Column(
-                Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text("فهرست برنامه‌ها خوانده نشد", fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "چیدمان شما محفوظ است. دوباره تلاش کنید.",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = .75f)
-                )
-                Spacer(Modifier.height(12.dp))
-                FilledTonalButton(onClick = onRetry) { Text("تلاش دوباره") }
+            Spacer(Modifier.width(8.dp))
+            FilledTonalIconButton(onClick = onSettings) {
+                Icon(Icons.Rounded.Settings, contentDescription = "تنظیمات")
             }
         }
     }
@@ -526,6 +477,7 @@ private fun AppPickerDialog(
     apps: List<AppEntry>,
     currentOrder: List<String>,
     iconCache: LruCache<String, ImageBitmap>,
+    onRefresh: () -> Unit,
     onDismiss: () -> Unit,
     onApply: (List<String>) -> Unit
 ) {
@@ -554,7 +506,8 @@ private fun AppPickerDialog(
                     placeholder = { Text("جستجوی نام یا شناسه برنامه") },
                     shape = RoundedCornerShape(18.dp)
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = onRefresh) { Text("به‌روزرسانی فهرست برنامه‌ها") }
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     items(filtered, key = { it.packageName }) { app ->
                         val checked = selected[app.packageName] == true
@@ -606,7 +559,7 @@ private fun MiniAppIcon(app: AppEntry, iconCache: LruCache<String, ImageBitmap>)
     LaunchedEffect(app.packageName) {
         if (icon == null) {
             val loaded = withContext(Dispatchers.IO) {
-                runCatching { loadAppIcon(context.applicationContext, app, 144).asImageBitmap() }.getOrNull()
+                runCatching { loadAppIcon(context.applicationContext, app, 96).asImageBitmap() }.getOrNull()
             }
             loaded?.let {
                 iconCache.put(app.packageName, it)
@@ -649,10 +602,9 @@ private fun NewPageDialog(onDismiss: () -> Unit, onCreate: (String) -> Unit) {
             )
         },
         confirmButton = {
-            TextButton(
-                enabled = title.isNotBlank(),
-                onClick = { onCreate(title.trim()) }
-            ) { Text("ساخت") }
+            TextButton(enabled = title.isNotBlank(), onClick = { onCreate(title.trim()) }) {
+                Text("ساخت")
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
     )
@@ -734,17 +686,23 @@ private fun queryLauncherApps(context: Context): List<AppEntry> {
 }
 
 private fun launchApp(context: Context, app: AppEntry) {
-    val component = ComponentName(app.packageName, app.activityName)
-    val intent = Intent.makeMainActivity(component)
+    val intent = if (app.activityName.isNotBlank()) {
+        Intent.makeMainActivity(ComponentName(app.packageName, app.activityName))
+    } else {
+        context.packageManager.getLaunchIntentForPackage(app.packageName)
+    } ?: return
     runCatching { context.startActivity(intent) }
 }
 
 private fun loadAppIcon(context: Context, app: AppEntry, maxSizePx: Int): Bitmap {
     val packageManager = context.packageManager
-    val component = ComponentName(app.packageName, app.activityName)
-    val drawable = runCatching { packageManager.getActivityIcon(component) }
-        .recoverCatching { packageManager.getApplicationIcon(app.packageName) }
-        .getOrThrow()
+    val drawable = if (app.activityName.isNotBlank()) {
+        runCatching { packageManager.getActivityIcon(ComponentName(app.packageName, app.activityName)) }
+            .recoverCatching { packageManager.getApplicationIcon(app.packageName) }
+            .getOrThrow()
+    } else {
+        packageManager.getApplicationIcon(app.packageName)
+    }
     return drawableToBitmap(drawable, maxSizePx)
 }
 
@@ -757,6 +715,41 @@ private fun createIconCache(): LruCache<String, ImageBitmap> =
                 .toInt()
         }
     }
+
+private fun loadAppCache(raw: String?): List<AppEntry> = try {
+    if (raw.isNullOrBlank()) emptyList() else {
+        val array = JSONArray(raw)
+        buildList(array.length()) {
+            repeat(array.length()) { index ->
+                val obj = array.optJSONObject(index) ?: return@repeat
+                val packageName = obj.optString("packageName").trim()
+                if (packageName.isBlank()) return@repeat
+                add(
+                    AppEntry(
+                        label = obj.optString("label").ifBlank { packageName.substringAfterLast('.') },
+                        packageName = packageName,
+                        activityName = obj.optString("activityName")
+                    )
+                )
+            }
+        }.distinctBy(AppEntry::packageName)
+    }
+} catch (_: Exception) {
+    emptyList()
+}
+
+private fun encodeAppCache(apps: List<AppEntry>): String {
+    val array = JSONArray()
+    apps.forEach { app ->
+        array.put(
+            JSONObject()
+                .put("label", app.label)
+                .put("packageName", app.packageName)
+                .put("activityName", app.activityName)
+        )
+    }
+    return array.toString()
+}
 
 private fun movePackage(list: SnapshotStateList<String>, packageName: String, delta: Int) {
     val from = list.indexOf(packageName)
