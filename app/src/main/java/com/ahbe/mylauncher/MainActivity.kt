@@ -549,11 +549,25 @@ private fun AppTile(
             )
         }
 
-        FilledTonalIconButton(
+        Surface(
             onClick = { showMenu = true },
-            modifier = Modifier.align(Alignment.TopEnd).size(28.dp)
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 2.dp, end = 2.dp)
+                .size(24.dp)
+                .shadow(1.dp, CircleShape),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surface.copy(alpha = .90f),
+            tonalElevation = 1.dp
         ) {
-            Icon(Icons.Rounded.MoreVert, "گزینه‌های برنامه", modifier = Modifier.size(17.dp))
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Rounded.MoreVert,
+                    "گزینه‌های برنامه",
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.primary.copy(alpha = .78f)
+                )
+            }
         }
     }
 
