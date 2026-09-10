@@ -341,58 +341,87 @@ private fun DashboardHeader(
             .fillMaxWidth()
             .statusBarsPadding()
             .padding(horizontal = 14.dp, vertical = 8.dp)
-            .shadow(8.dp, RoundedCornerShape(30.dp)),
-        shape = RoundedCornerShape(30.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = .94f)
+            .shadow(4.dp, RoundedCornerShape(24.dp)),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = .96f)
     ) {
-        Box(
-            Modifier
+        Column(
+            modifier = Modifier
                 .background(
                     Brush.horizontalGradient(
                         listOf(
-                            MaterialTheme.colorScheme.primary.copy(alpha = .13f),
-                            Color.Transparent,
-                            MaterialTheme.colorScheme.primary.copy(alpha = .07f)
+                            MaterialTheme.colorScheme.primary.copy(alpha = .08f),
+                            Color.Transparent
                         )
                     )
                 )
-                .padding(horizontal = 16.dp, vertical = 16.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Column(Modifier.weight(1f)) {
-                    Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            PersianDate.todayLong(),
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = .60f),
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                        Text("  •  ", color = MaterialTheme.colorScheme.onSurface.copy(alpha = .35f))
-                        Text(
-                            "${appCount.toString().toPersianDigits()} برنامه",
-                            color = MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                    }
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        PersianDate.todayLong(),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = .58f),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.primary.copy(alpha = .10f)
                 ) {
                     Text(
                         time,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                        modifier = Modifier.padding(horizontal = 13.dp, vertical = 8.dp),
                         color = MaterialTheme.colorScheme.primary,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 21.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
                     )
                 }
-                Spacer(Modifier.width(8.dp))
-                FilledTonalIconButton(onClick = onAdd) { Icon(Icons.Rounded.Add, "افزودن برنامه") }
-                Spacer(Modifier.width(5.dp))
-                FilledTonalIconButton(onClick = onSettings) { Icon(Icons.Rounded.Settings, "تنظیمات") }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AssistChip(
+                    onClick = {},
+                    label = {
+                        Text(
+                            "${appCount.toString().toPersianDigits()} برنامه",
+                            maxLines = 1
+                        )
+                    }
+                )
+                Spacer(Modifier.weight(1f))
+                FilledTonalIconButton(
+                    onClick = onAdd,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(Icons.Rounded.Add, "افزودن برنامه", modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.width(6.dp))
+                FilledTonalIconButton(
+                    onClick = onSettings,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(Icons.Rounded.Settings, "تنظیمات", modifier = Modifier.size(20.dp))
+                }
             }
         }
     }
