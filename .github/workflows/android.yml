@@ -44,6 +44,9 @@ jobs:
       - name: Apply version 29 daily quote header
         run: python3 scripts/apply_v29_daily_quote.py
 
+      - name: Apply version 30 instant startup and quote refresh
+        run: python3 scripts/apply_v30_instant_start_quotes.py
+
       - name: Fix generated imports
         run: |
           python3 - <<'PY'
@@ -71,6 +74,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MyLauncher-v29-apk
+          name: MyLauncher-v30-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
