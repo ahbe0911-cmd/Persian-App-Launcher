@@ -20,7 +20,7 @@ new_activity = '''class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         // Some apps (Telegram is a common example) switch launcher aliases/icons
-        // without changing package name. Refresh the launcher-facing icon state
+        // without changing package name. Refresh launcher metadata and icon state
         // whenever this launcher becomes active again.
         iconRefreshGeneration++
     }
@@ -51,9 +51,9 @@ if old not in s:
     raise SystemExit("AppTile signature anchor not found")
 s = s.replace(old, new, 1)
 
-# The existing v21 cache key already includes the rendered pixel size. Add the
-# active launcher activity plus a resume generation, so a runtime icon/alias
-# change can never reuse a stale bitmap from the previous foreground session.
+# The existing v21 cache key already includes rendered pixel size. Add the
+# active launcher activity plus resume generation, so runtime icon/alias changes
+# cannot reuse a stale bitmap from a previous foreground session.
 old = '''    val cacheKey = remember(app.packageName, iconPx) { "${app.packageName}@$iconPx" }
     var icon by remember(cacheKey) { mutableStateOf(iconCache.get(cacheKey)) }'''
 new = '''    val cacheKey = remember(app.packageName, app.activityName, iconPx, iconRefreshGeneration) {
@@ -114,5 +114,27 @@ if old not in s:
     raise SystemExit("MiniAppIcon cache anchor not found")
 s = s.replace(old, new, 1)
 
+# Refresh PackageManager launcher metadata on resume as well. This is essential
+# for apps that implement alternate icons by enabling a different activity-alias:
+# the package name stays the same, but the active launcher component changes.
+marker = "    val dark = isSystemInDarkTheme()\n"
+refresh_effect = '''    LaunchedEffect(iconRefreshGeneration) {
+        if (iconRefreshGeneration > 0) {
+            iconCache.evictAll()
+            withContext(Dispatchers.IO) { runCatching { queryLauncherApps(appContext) } }
+                .onSuccess { loaded ->
+                    if (loaded.isNotEmpty()) {
+                        installedApps = loaded
+                        prefs.edit().putString(KEY_APP_CACHE, encodeAppCache(loaded)).apply()
+                    }
+                }
+        }
+    }
+
+'''
+if marker not in s:
+    raise SystemExit("theme anchor not found")
+s = s.replace(marker, refresh_effect + marker, 1)
+
 p.write_text(s, encoding="utf-8")
-print("Applied v28 dynamic icon refresh")
+print("Applied v28 dynamic icon + launcher alias refresh")
